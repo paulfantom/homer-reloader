@@ -78,22 +78,17 @@ func main() {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
 
-	// Initilize metrics
+	// Initialize metrics
 	reloadsTotal.WithLabelValues(*homerDeployment)
 	lastReloadError.WithLabelValues(*homerDeployment)
 	reloadsErrorsTotal.WithLabelValues(*homerDeployment)
 
-	// Get kubernetes client
-	home, err := os.UserHomeDir()
-	if err != nil {
-		panic(err)
-	}
+	// Get Kubernetes client
+	home, _ := os.UserHomeDir()
 
 	kubeconfig := ""
 	if _, err := os.Stat(filepath.Join(home, ".kube", "config")); err == nil {
-		kubeconfig = filepath.Join(
-			os.Getenv("HOME"), ".kube", "config",
-		)
+		kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
 	}
 
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
@@ -121,37 +116,40 @@ func main() {
 	}
 
 	mutex := &sync.Mutex{}
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+
 	go func() {
+		defer wg.Done()
+
 		for {
 			event, open := <-watcher.ResultChan()
-			if open {
-				switch event.Type {
-				case watch.Added:
-					fallthrough
-				case watch.Modified:
-					fallthrough
-				case watch.Deleted:
-					mutex.Lock()
-					reloadsTotal.WithLabelValues(*homerDeployment).Inc()
-					err := reload(client, *homerNamespace, *homerDeployment, *homerConfigMap, *templateConfigMap)
-					if err != nil {
-						lastReloadError.WithLabelValues(*homerDeployment).Set(1.0)
-						log.Println(err)
-					} else {
-						lastReloadError.WithLabelValues(*homerDeployment).Set(0.0)
-						reloadsErrorsTotal.WithLabelValues(*homerDeployment).Inc()
-					}
-					mutex.Unlock()
-				default:
-				}
-			} else {
+			if !open {
 				return
+			}
+
+			switch event.Type {
+			case watch.Added, watch.Modified, watch.Deleted:
+				mutex.Lock()
+				reloadsTotal.WithLabelValues(*homerDeployment).Inc()
+				err := reload(client, *homerNamespace, *homerDeployment, *homerConfigMap, *templateConfigMap)
+				if err != nil {
+					lastReloadError.WithLabelValues(*homerDeployment).Set(1.0)
+					log.Println(err)
+				} else {
+					lastReloadError.WithLabelValues(*homerDeployment).Set(0.0)
+					reloadsErrorsTotal.WithLabelValues(*homerDeployment).Inc()
+				}
+				mutex.Unlock()
 			}
 		}
 	}()
 
 	http.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
 	log.Fatal(http.ListenAndServe(":9333", nil))
+
+	wg.Wait()
 }
 
 func reload(client *kubernetes.Clientset, homerNamespace, homerDeployment, homerConfigMap, templateConfigMap string) error {
