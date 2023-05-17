@@ -49,6 +49,6 @@ jobs:
             Version=${{  env.TAG }}
             GitCommit=${{ github.sha }}
           tags: |
-            ghcr.io/${{ env.REPO_OWNER }}/cats:${{ github.sha }}
-            ghcr.io/${{ env.REPO_OWNER }}/cats:${{ env.TAG }}
-            ghcr.io/${{ env.REPO_OWNER }}/cats:latest
+            ghcr.io/${{ env.REPO_OWNER }}/homer-reloader:${{ github.sha }}
+            ghcr.io/${{ env.REPO_OWNER }}/homer-reloader:${{ env.TAG }}
+            ghcr.io/${{ env.REPO_OWNER }}/homer-reloader:latest
