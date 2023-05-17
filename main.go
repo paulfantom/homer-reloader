@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"sync"
@@ -21,10 +22,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	networkv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 )
 
 const (
@@ -84,19 +88,7 @@ func main() {
 	reloadsErrorsTotal.WithLabelValues(*homerDeployment)
 
 	// Get Kubernetes client
-	home, _ := os.UserHomeDir()
-
-	kubeconfig := ""
-	if _, err := os.Stat(filepath.Join(home, ".kube", "config")); err == nil {
-		kubeconfig = filepath.Join(os.Getenv("HOME"), ".kube", "config")
-	}
-
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	client, err := kubernetes.NewForConfig(config)
+	client, err := getKubernetesClient()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -152,6 +144,28 @@ func main() {
 	wg.Wait()
 }
 
+func getKubernetesClient() (*kubernetes.Clientset, error) {
+	// Find kubeconfig file
+	kubeconfig := filepath.Join(homedir.HomeDir(), ".kube", "config")
+	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
+		kubeconfig = "" // Use in-cluster configuration if kubeconfig doesn't exist
+	}
+
+	// Build Kubernetes client config
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create Kubernetes client
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return client, nil
+}
+
 func reload(client *kubernetes.Clientset, homerNamespace, homerDeployment, homerConfigMap, templateConfigMap string) error {
 	// get ingresses and parse annotations
 	sites := getSites(client)
@@ -197,23 +211,39 @@ func getSites(clientset *kubernetes.Clientset) []Site {
 		log.Fatal(err)
 	}
 
-	// Sort Ingress objects by their name
-	sort.Slice(ingresses.Items, func(i, j int) bool {
-		return ingresses.Items[i].Name < ingresses.Items[j].Name
-	})
+	// Create a buffered channel for ingresses
+	ingressChan := make(chan networkv1.Ingress, len(ingresses.Items))
 
-	// Iterate over ingresses and extract annotations
-	sites := make([]Site, 0)
+	// Process ingresses concurrently
+	var wg sync.WaitGroup
 	for _, ingress := range ingresses.Items {
+		wg.Add(1)
+		go func(i networkv1.Ingress) {
+			defer wg.Done()
+			ingressChan <- i
+		}(ingress)
+	}
+
+	go func() {
+		wg.Wait()
+		close(ingressChan)
+	}()
+
+	// Collect parsed sites from ingresses
+	sites := make([]Site, 0)
+	for ingress := range ingressChan {
 		sites = append(sites, parseIngress(ingress))
 	}
 
-	// Sort by prio
+	// Sort by name
+	sort.Slice(sites, func(i, j int) bool {
+		return sites[i].Name < sites[j].Name
+	})
+
+	// Sort by priority
 	sort.Slice(sites, func(i, j int) bool {
 		return sites[i].Priority < sites[j].Priority
 	})
-
-	fmt.Printf("Found %d sites: +%v\n", len(sites), sites)
 
 	return sites
 }
@@ -221,49 +251,46 @@ func getSites(clientset *kubernetes.Clientset) []Site {
 func parseIngress(ingress networkv1.Ingress) Site {
 	annotations := ingress.GetAnnotations()
 
-	// Create Site from ingress annotations
-	site := Site{
-		Name: annotations["reloader.homer/name"],
-		Url:  annotations["reloader.homer/url"],
-	}
-	// Parse group
-	group, ok := annotations["reloader.homer/group"]
-	if ok {
-		site.Group = group
-	}
-	// Parse subtitle
-	subtitle, ok := annotations["reloader.homer/subtitle"]
-	if ok {
-		site.Subtitle = subtitle
-	}
-	// Parse logo
-	logo, ok := annotations["reloader.homer/logo"]
-	if ok {
-		site.Logo = logo
-	}
-	// Parse tag
-	tag, ok := annotations["reloader.homer/tag"]
-	if ok {
-		site.Tag = tag
-	}
-	// Parse priority
-	prio, err := strconv.Atoi(annotations["reloader.homer/prio"])
-	if err != nil {
-		site.Priority = 999
-	} else {
-		site.Priority = prio
+	// Define a map of annotation keys and corresponding struct field names
+	annotationKeys := map[string]string{
+		"reloader.homer/name":     "Name",
+		"reloader.homer/url":      "Url",
+		"reloader.homer/group":    "Group",
+		"reloader.homer/subtitle": "Subtitle",
+		"reloader.homer/logo":     "Logo",
+		"reloader.homer/tag":      "Tag",
+		//"reloader.homer/prio":     "Priority",  Priority is handled separately as reflect cannot set int fields
 	}
 
-	// Check if ingress has a tls section
+	// Create Site from ingress annotations
+	site := Site{}
+
+	for annotationKey, fieldName := range annotationKeys {
+		if value, ok := annotations[annotationKey]; ok {
+			reflect.ValueOf(&site).Elem().FieldByName(fieldName).SetString(value)
+		}
+	}
+
+	// Check if ingress has a TLS section
 	scheme := "http"
 	if len(ingress.Spec.TLS) > 0 {
 		scheme = "https"
 	}
 
-	// Get URL from first host in ingress object
+	// Get URL from the first host in the ingress object
 	if len(ingress.Spec.Rules) > 0 {
 		site.Url = fmt.Sprintf("%s://%s", scheme, ingress.Spec.Rules[0].Host)
 	}
+
+	// Parse priority
+	if prioStr, ok := annotations["reloader.homer/prio"]; ok {
+		if prio, err := strconv.Atoi(prioStr); err == nil {
+			site.Priority = prio
+		} else {
+			site.Priority = 999
+		}
+	}
+
 	return site
 }
 
@@ -273,8 +300,11 @@ func generateHomerConfig(t string, sites []Site) (string, string, error) {
 		return "", "", err
 	}
 
-	// Execute template
+	// Initialize and reset buffer
 	buf := new(bytes.Buffer)
+	buf.Reset()
+
+	// Execute template
 	err = tmpl.Execute(buf, sites)
 	if err != nil {
 		return "", "", err
@@ -286,36 +316,31 @@ func generateHomerConfig(t string, sites []Site) (string, string, error) {
 }
 
 func createOrUpdateConfigMap(clientset *kubernetes.Clientset, namespace, name string, data map[string]string) error {
-	_, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	configMaps := clientset.CoreV1().ConfigMaps(namespace)
+	existingConfigMap, err := configMaps.Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
-		_, err := clientset.CoreV1().ConfigMaps(namespace).Create(context.Background(), &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: name,
-			},
-			Data: data,
-		}, metav1.CreateOptions{})
+		if errors.IsNotFound(err) {
+			// ConfigMap doesn't exist, create a new one
+			configMap := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: name,
+				},
+				Data: data,
+			}
+			_, err = configMaps.Create(context.Background(), configMap, metav1.CreateOptions{})
+			return err
+		}
 		return err
 	}
-	_, err = clientset.CoreV1().ConfigMaps(namespace).Update(context.Background(), &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Data: data,
-	}, metav1.UpdateOptions{})
+
+	// ConfigMap exists, update it
+	existingConfigMap.Data = data
+	_, err = configMaps.Update(context.Background(), existingConfigMap, metav1.UpdateOptions{})
 	return err
 }
 
 func annotateDeployment(clientset *kubernetes.Clientset, namespace string, deployment string, checksum string) error {
-	d, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), deployment, metav1.GetOptions{})
-	if err != nil {
-		log.Println("Unable to get deployment")
-		return err
-	}
-	d.Spec.Template.ObjectMeta.Annotations["checksum/config"] = checksum
-	_, err = clientset.AppsV1().Deployments(namespace).Update(context.TODO(), d, metav1.UpdateOptions{})
-	if err != nil {
-		log.Println("Unable to update deployment")
-		return err
-	}
-	return nil
+	patch := []byte(fmt.Sprintf(`{"metadata": {"annotations": {"checksum/config": "%s"}}}`, checksum))
+	_, err := clientset.AppsV1().Deployments(namespace).Patch(context.TODO(), deployment, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	return err
 }
