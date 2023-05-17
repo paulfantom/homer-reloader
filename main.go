@@ -340,7 +340,7 @@ func createOrUpdateConfigMap(clientset *kubernetes.Clientset, namespace, name st
 }
 
 func annotateDeployment(clientset *kubernetes.Clientset, namespace string, deployment string, checksum string) error {
-	patch := []byte(fmt.Sprintf(`{"spec": {"template": {"metadata": {"annotations": {"checksum/config": "%s"}}}}`, checksum))
+	patch := []byte(fmt.Sprintf(`{"spec": {"template": {"metadata": {"annotations": {"checksum/config": "%s"}}}}}`, checksum))
 	_, err := clientset.AppsV1().Deployments(namespace).Patch(context.TODO(), deployment, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
 	return err
 }
