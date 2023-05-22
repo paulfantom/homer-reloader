@@ -75,6 +75,13 @@ func main() {
 			Help:      "Whether the last reload resulted in an error (1 for error, 0 for success)",
 		}, []string{"deployment"},
 	)
+	lastReloadSuccessTimestamp := promauto.With(reg).NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name:      "last_reload_success_timestamp",
+			Namespace: metricPrefix,
+			Help:      "Timestamp of the last successful reload",
+		}, []string{"deployment"},
+	)
 
 	// Add Go module build info.
 	reg.MustRegister(
@@ -132,6 +139,7 @@ func main() {
 					lastReloadError.WithLabelValues(*homerDeployment).Set(1.0)
 					log.Println(err)
 				} else {
+					lastReloadSuccessTimestamp.WithLabelValues(*homerDeployment).SetToCurrentTime()
 					lastReloadError.WithLabelValues(*homerDeployment).Set(0.0)
 				}
 				// Empty the channel to reduce number of reloads
