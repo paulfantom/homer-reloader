@@ -135,8 +135,8 @@ func main() {
 					lastReloadError.WithLabelValues(*homerDeployment).Set(0.0)
 				}
 				// Empty the channel to reduce number of reloads
-				for len(watcher.ResultChan()) > 0 {
-					<-watcher.ResultChan()
+				for range watcher.ResultChan() {
+					// Do nothing, just drain the channel
 				}
 				mutex.Unlock()
 			}
