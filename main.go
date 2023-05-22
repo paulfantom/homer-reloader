@@ -181,7 +181,6 @@ func reload(client *kubernetes.Clientset, homerNamespace, homerDeployment, homer
 
 	// Generate site configuration
 	config, checksum, err := generateHomerConfig(template, sites)
-	log.Println("checksum: ", checksum)
 	if err != nil {
 		return err
 	}
