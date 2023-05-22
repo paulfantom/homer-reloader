@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"text/template"
 
@@ -270,6 +271,8 @@ func parseIngress(ingress networkv1.Ingress) Site {
 			reflect.ValueOf(&site).Elem().FieldByName(fieldName).SetString(value)
 		}
 	}
+
+	site.Name = strings.Title(site.Name)
 
 	// Check if ingress has a TLS section
 	scheme := "http"
