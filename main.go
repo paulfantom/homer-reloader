@@ -128,11 +128,11 @@ func main() {
 				reloadsTotal.WithLabelValues(*homerDeployment).Inc()
 				err := reload(client, *homerNamespace, *homerDeployment, *homerConfigMap, *templateConfigMap)
 				if err != nil {
+					reloadsErrorsTotal.WithLabelValues(*homerDeployment).Inc()
 					lastReloadError.WithLabelValues(*homerDeployment).Set(1.0)
 					log.Println(err)
 				} else {
 					lastReloadError.WithLabelValues(*homerDeployment).Set(0.0)
-					reloadsErrorsTotal.WithLabelValues(*homerDeployment).Inc()
 				}
 				mutex.Unlock()
 			}
