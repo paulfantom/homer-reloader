@@ -18,16 +18,8 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set TAG to branch name when not a tagged commit
-        if: startsWith(github.ref, 'refs/heads/')
-        run: echo TAG=${GITHUB_REF#refs/heads/} >> $GITHUB_ENV
-
-      - name: Get TAG
-        if: startsWith(github.ref, 'refs/tags/')
-        run: echo TAG=${GITHUB_REF#refs/tags/} >> $GITHUB_ENV
-
-      - name: Get Repo Owner
-        run: echo "REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')" > $GITHUB_ENV
+      - name: Get Repo Name
+        run: echo "REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -40,15 +32,31 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
           registry: ghcr.io
 
-      - name: Release build
+      - name: Build development image
         uses: docker/build-push-action@v3
+        if: startsWith(github.ref, 'refs/heads/')
         with:
           outputs: "type=registry,push=true"
           platforms: linux/amd64,linux/arm64
           build-args: |
-            Version=${{  env.TAG }}
+            Version=dev
             GitCommit=${{ github.sha }}
           tags: |
-            ghcr.io/${{ env.REPO_OWNER }}/homer-reloader:${{ github.sha }}
-            ghcr.io/${{ env.REPO_OWNER }}/homer-reloader:${{ env.TAG }}
-            ghcr.io/${{ env.REPO_OWNER }}/homer-reloader:latest
+            ghcr.io/${{ env.REPO_NAME }}:${{ github.sha }}
+
+      - name: Get TAG
+        if: startsWith(github.ref, 'refs/tags/')
+        run: echo TAG=${GITHUB_REF#refs/tags/} >> $GITHUB_ENV
+
+      - name: Build release image
+        uses: docker/build-push-action@v3
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          outputs: "type=registry,push=true"
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            Version=${{ env.TAG }}
+            GitCommit=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ env.REPO_NAME }}:${{ env.TAG }}
+            ghcr.io/${{ env.REPO_NAME }}:latest
