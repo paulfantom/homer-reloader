@@ -134,6 +134,10 @@ func main() {
 				} else {
 					lastReloadError.WithLabelValues(*homerDeployment).Set(0.0)
 				}
+				// Empty the channel to reduce number of reloads
+				for len(watcher.ResultChan()) > 0 {
+					<-watcher.ResultChan()
+				}
 				mutex.Unlock()
 			}
 		}
