@@ -102,13 +102,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Define if we should watch all ingresses or only those with pre-defined label
-	listOptions := metav1.ListOptions{}
-	if ! *watchAll {
-		// Set label selector to empty string to watch all ingresses
-		listOptions = metav1.ListOptions{
-			LabelSelector: "reloader.homer/enabled==true",
-		}
+	ingressSelector := "reloader.homer/enabled==true"
+	if watchAll != nil && *watchAll {
+		// Empty selector means watch all ingresses
+		ingressSelector = ""
 	}
 
 	// Watch ingresses
@@ -117,7 +114,9 @@ func main() {
 		Ingresses("").
 		Watch(
 			context.Background(),
-			listOptions,
+			metav1.ListOptions{
+				LabelSelector: ingressSelector,
+			},
 		)
 	if err != nil {
 		log.Fatal(err)
@@ -141,7 +140,7 @@ func main() {
 			case watch.Added, watch.Modified, watch.Deleted:
 				mutex.Lock()
 				reloadsTotal.WithLabelValues(*homerDeployment).Inc()
-				err := reload(client, *homerNamespace, *homerDeployment, *homerConfigMap, *templateConfigMap)
+				err := reload(client, *homerNamespace, *homerDeployment, *homerConfigMap, *templateConfigMap, ingressSelector)
 				if err != nil {
 					reloadsErrorsTotal.WithLabelValues(*homerDeployment).Inc()
 					lastReloadError.WithLabelValues(*homerDeployment).Set(1.0)
@@ -187,9 +186,9 @@ func getKubernetesClient() (*kubernetes.Clientset, error) {
 	return client, nil
 }
 
-func reload(client *kubernetes.Clientset, homerNamespace, homerDeployment, homerConfigMap, templateConfigMap string) error {
+func reload(client *kubernetes.Clientset, homerNamespace, homerDeployment, homerConfigMap, templateConfigMap, ingressSelector string) error {
 	// get ingresses and parse annotations
-	sites := getSites(client)
+	sites := getSites(client, ingressSelector)
 
 	// Get template config map data
 	// read template configmap
@@ -223,9 +222,9 @@ func reload(client *kubernetes.Clientset, homerNamespace, homerDeployment, homer
 	return nil
 }
 
-func getSites(clientset *kubernetes.Clientset) []Site {
+func getSites(clientset *kubernetes.Clientset, ingressSelector string) []Site {
 	ingresses, err := clientset.NetworkingV1().Ingresses("").List(context.Background(), metav1.ListOptions{
-		LabelSelector: "reloader.homer/enabled==true",
+		LabelSelector: ingressSelector,
 	})
 	if err != nil {
 		log.Fatal(err)
