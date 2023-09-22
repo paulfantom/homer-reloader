@@ -51,6 +51,7 @@ func main() {
 	homerDeployment := flag.String("homer-deployment", "homer", "homer deployment name")
 	homerConfigMap := flag.String("homer-configmap", "homer-configmap", "the config map containing the homer configuration")
 	templateConfigMap := flag.String("template-configmap", "homer-template", "the config map containing the template for homer configuration")
+	watchAll := flag.Bool("watch-all-ingresses", false, "watch all Ingress resources in the cluster, rather than just those with pre-defined label")
 	flag.Parse()
 
 	reg := prometheus.NewRegistry()
@@ -101,15 +102,22 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Define if we should watch all ingresses or only those with pre-defined label
+	listOptions := metav1.ListOptions{}
+	if ! *watchAll {
+		// Set label selector to empty string to watch all ingresses
+		listOptions = metav1.ListOptions{
+			LabelSelector: "reloader.homer/enabled==true",
+		}
+	}
+
 	// Watch ingresses
 	watcher, err := client.
 		NetworkingV1().
 		Ingresses("").
 		Watch(
 			context.Background(),
-			metav1.ListOptions{
-				LabelSelector: "reloader.homer/enabled==true",
-			},
+			listOptions,
 		)
 	if err != nil {
 		log.Fatal(err)
