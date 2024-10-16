@@ -1,6 +1,6 @@
 # Based on https://actuated.dev/blog/multi-arch-docker-github-actions
 
-FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.23-alpine as builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.23-alpine AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG TARGETOS
