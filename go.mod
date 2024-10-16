@@ -1,6 +1,6 @@
 module github.com/paulfantom/ingress-watch-reload
 
-go 1.20
+go 1.23
 
 require (
 	github.com/prometheus/client_golang v1.15.1
