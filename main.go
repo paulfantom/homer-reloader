@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -28,7 +29,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	toolsWatch "k8s.io/client-go/tools/watch"
 	"k8s.io/client-go/util/homedir"
 )
 
@@ -108,16 +111,16 @@ func main() {
 		ingressSelector = ""
 	}
 
+	watchFunc := func(options metav1.ListOptions) (watch.Interface, error) {
+		listOptions := metav1.ListOptions{
+			LabelSelector: ingressSelector,
+		}
+		return client.NetworkingV1().Ingresses("").Watch(context.Background(), listOptions)
+	}
+
 	// Watch ingresses
-	watcher, err := client.
-		NetworkingV1().
-		Ingresses("").
-		Watch(
-			context.Background(),
-			metav1.ListOptions{
-				LabelSelector: ingressSelector,
-			},
-		)
+	watcher, err := toolsWatch.NewRetryWatcher("1", &cache.ListWatch{WatchFunc: watchFunc})
+
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -131,7 +134,7 @@ func main() {
 		defer wg.Done()
 
 		for {
-			event, open := <-watcher.ResultChan()
+			event, open := readDebounced(watcher, 1*time.Second, 10*time.Second)
 			if !open {
 				return
 			}
@@ -149,10 +152,6 @@ func main() {
 					lastReloadSuccessTimestamp.WithLabelValues(*homerDeployment).SetToCurrentTime()
 					lastReloadError.WithLabelValues(*homerDeployment).Set(0.0)
 				}
-				// Empty the channel to reduce number of reloads
-				for range watcher.ResultChan() {
-					// Do nothing, just drain the channel
-				}
 				mutex.Unlock()
 			}
 		}
@@ -162,6 +161,33 @@ func main() {
 	log.Fatal(http.ListenAndServe(":9333", nil))
 
 	wg.Wait()
+}
+
+func readDebounced(watcher *toolsWatch.RetryWatcher, min time.Duration, max time.Duration) (watch.Event, bool) {
+	var event watch.Event
+	var open bool
+	var minTimer <-chan time.Time
+	var maxTimer <-chan time.Time
+
+	dataRead := false
+
+	for {
+		select {
+		case event, open = <-watcher.ResultChan():
+			if !open && !dataRead {
+				return event, open
+			}
+			dataRead = true
+			minTimer = time.After(min)
+			if maxTimer == nil {
+				maxTimer = time.After(max)
+			}
+		case <-maxTimer:
+			return event, open
+		case <-minTimer:
+			return event, open
+		}
+	}
 }
 
 func getKubernetesClient() (*kubernetes.Clientset, error) {
